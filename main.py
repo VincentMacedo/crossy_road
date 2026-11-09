@@ -10,6 +10,7 @@ pygame.display.set_caption("Carré rouge")
 
 #monde
 World = Monde(ecran, 67123)
+liste_sol = World.generer_sol()   
 
 clock = pygame.time.Clock()
 running = True
@@ -30,6 +31,15 @@ while running:
             if event.key == pygame.K_q:
                 World.joueur.deplacer_gauche()
             
+    ecran.fill(World.noir)
+    
+    World.mettre_a_jour(World.joueur)
+
+    ecran.fill(World.noir)
+
+    for ligne in World.lignes.values():
+        World.dessine_decor(ligne)
+    
 
     World.voiture1.rectangle.x+=World.voiture1.vitesse
     if World.voiture1.rectangle.x>600:
@@ -44,12 +54,12 @@ while running:
 
     World.train1.deplacer()
 
-    ecran.fill(World.noir)
-    for i in range (len(World.liste_vehicules)):
-        World.dessine_objet(World.rouge,World.liste_vehicules[i])
+    
+    for vehicule in World.liste_vehicules:
+        World.dessine_objet(World.rouge, vehicule)
 
-    for i  in range (len(World.liste_arbres)):
-        World.dessine_decor(World.vert,World.liste_arbres[i])
+    World.dessine_objet(World.rouge, World.joueur)
+
     
     World.dessine_objet(World.rouge, World.joueur)
 
