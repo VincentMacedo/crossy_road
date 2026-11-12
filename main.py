@@ -6,11 +6,10 @@ pygame.init()
 # Fenêtre
 largeur, hauteur = 800, 600
 ecran = pygame.display.set_mode((largeur, hauteur))
-pygame.display.set_caption("Carré rouge")
+pygame.display.set_caption("Crossy Road")
 
-#monde
-World = Monde(ecran, 67123)
-liste_sol = World.generer_sol()   
+# Monde
+monde = Monde(ecran, 67123)
 
 clock = pygame.time.Clock()
 running = True
@@ -20,48 +19,25 @@ while running:
         if event.type == pygame.QUIT:
             running = False
 
-        #touches
+        # touches
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_z:
-                World.joueur.deplacer_haut()
+                monde.joueur.deplacer_haut()
             if event.key == pygame.K_s:
-                World.joueur.deplacer_bas()
+                monde.joueur.deplacer_bas()
             if event.key == pygame.K_d:
-                World.joueur.deplacer_droite()
+                monde.joueur.deplacer_droite()
             if event.key == pygame.K_q:
-                World.joueur.deplacer_gauche()
-            
-    ecran.fill(World.noir)
-    
-    World.mettre_a_jour(World.joueur)
+                monde.joueur.deplacer_gauche()
 
-    ecran.fill(World.noir)
+    # logique : caméra, génération des lignes, véhicules, animation du joueur
+    monde.mettre_a_jour()
 
-    for ligne in World.lignes.values():
-        World.dessine_decor(ligne)
-    
-
-    World.voiture1.rectangle.x+=World.voiture1.vitesse
-    if World.voiture1.rectangle.x>600:
-        World.voiture1.rectangle.x=0
-
-    World.voiture2.rectangle.x+=World.voiture2.vitesse
-    if World.voiture2.rectangle.x>600:
-        World.voiture2.rectangle.x=0
-
-    if World.joueur.contact(World.liste_vehicules) == True:
+    if monde.joueur.contact(monde.liste_vehicules):
         print("contact!!!")
 
-    World.train1.deplacer()
-
-    
-    for vehicule in World.liste_vehicules:
-        World.dessine_objet(World.rouge, vehicule)
-
-    World.dessine_objet(World.rouge, World.joueur)
-
-    
-    World.dessine_objet(World.rouge, World.joueur)
+    # rendu isométrique
+    monde.dessiner()
 
     pygame.display.flip()
     clock.tick(60)
