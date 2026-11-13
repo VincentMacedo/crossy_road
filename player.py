@@ -44,8 +44,10 @@ class Player:
         return self.rectangle.colliderect(obstacle)
 
     def contact(self, vehicules):
+        # zones légèrement réduites pour que le contact soit juste visuellement
+        zone = self.rectangle.inflate(-12, -12)
         for vehicule in vehicules:
-            if self.rect_dans_rect(vehicule.rectangle):
+            if zone.colliderect(vehicule.rectangle.inflate(-8, -12)):
                 return True  # Il y a contact
 
         return False  # Aucun contact
