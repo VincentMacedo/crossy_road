@@ -35,6 +35,9 @@ cause = ""
 clock = pygame.time.Clock()
 running = True
 
+
+
+
 while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -61,17 +64,28 @@ while running:
     # actions du bot
     if mode_de_jeu == 2 and not game_over:
         temps_actuel = pygame.time.get_ticks()
-
         if temps_actuel - dernier_deplacement >= cooldown:
-            if monde.camera_y > 0:
-                monde.deplacer_joueur(0, -1)
+            if  monde.obstacle_devant(0, -1)==False:
+                monde.deplacer_joueur(0, -1) #haut
                 dernier_deplacement = temps_actuel
 
+            if  monde.obstacle_devant(1, 0)==False:
+                monde.deplacer_joueur(1, 0) #droite
+                dernier_deplacement = temps_actuel
+
+            if  monde.obstacle_devant(-1, 0)==False:
+                monde.deplacer_joueur(-1, 0) #gauche
+                dernier_deplacement = temps_actuel
+
+            if  monde.obstacle_devant(0, 1)==False:
+                monde.deplacer_joueur(0, 1) #derrière
+                dernier_deplacement = temps_actuel
+
+            
+
     if not game_over:
-        # logique : caméra, génération des lignes, véhicules, rondins, animation du joueur
         monde.mettre_a_jour()
 
-        # score = nombre de lignes gagnées depuis le départ
         score = max(score, (400 - monde.joueur.rectangle.y) // monde.TAILLE_LIGNE)
 
         if monde.joueur.contact(monde.liste_vehicules):
@@ -84,7 +98,7 @@ while running:
             game_over = True
             cause = "Tu t'es noyé !"
 
-    # rendu
+    
     monde.dessiner()
 
     if game_over:

@@ -359,11 +359,46 @@ class Monde:
         self.camera_x += (cible_x - self.camera_x) * 0.12
         self.camera_y += (cible_y - self.camera_y) * 0.12
 
+
+
     def hauteur_sol(self, indice):
         ligne = self.lignes.get(indice)
         if ligne is None:
             return 0
         return self.STYLES[ligne["type"]][1]
+
+    #code bot pouulet
+
+    def obstacle_devant(self, dcol=0, dlig=-1, marge=0):
+        """True s'il y a un arbre, un rocher, une voiture/un camion ou un train sur la case visée.
+        Par défaut : la case juste devant le joueur (dlig=-1).
+        marge : détecte aussi les véhicules qui sont à moins de `marge` pixels de la case."""
+        t = self.TAILLE_LIGNE
+        r = self.joueur.rectangle
+        col = round(r.x / t) + dcol
+        indice = r.y // t + dlig
+
+        ligne = self.lignes.get(indice)
+        if ligne is None:
+            return False
+
+        # 1. arbre ou rocher : lu dans le dictionnaire du décor de la ligne
+        if ligne["decor"].get(col) in ("arbre", "rocher"):
+            return True
+
+        # 2. voiture, camion ou train : on teste si leur rectangle touche la case visée
+        case = pygame.Rect(col * t, indice * t, t, t)
+        zone = case.inflate(2 * marge, 0)        # élargie sur les côtés de `marge` pixels
+        for vehicule in ligne["vehicules"]:
+            if zone.colliderect(vehicule.rectangle):
+                return True
+
+        return False
+
+    def analyse(self):
+        return False
+
+    
 
     # ------------------------------------------------------------------
     # Projection et primitives de dessin

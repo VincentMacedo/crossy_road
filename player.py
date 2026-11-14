@@ -86,3 +86,5 @@ class Player:
                 return True  # Il y a contact
 
         return False  # Aucun contact
+
+    
