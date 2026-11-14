@@ -2,7 +2,12 @@ import random
 import pygame
 from monde import Monde
 
+
+mode_de_jeu = int(input("Entre 1 pour jouer 2 pour faire jouer l'IA : "))
 pygame.init()
+graine = random.randint(0, 10000)  # graine de génération du monde
+cooldown = 100  # temps de rafraichissement du calcul du bot
+dernier_deplacement = 0
 
 # Fenêtre
 largeur, hauteur = 800, 600
@@ -22,10 +27,9 @@ def afficher_texte(texte, police, couleur, y):
     ecran.blit(image, image.get_rect(center=(largeur // 2, y)))
 
 
-monde = Monde(ecran, 67123)
+monde = Monde(ecran, graine)
 score = 0
 game_over = False
-noyade = False          # le joueur a sauté dans l'eau : il se noie dès qu'il atterrit
 cause = ""
 
 clock = pygame.time.Clock()
@@ -43,24 +47,28 @@ while running:
                     monde = Monde(ecran, random.randint(0, 10**6))
                     score = 0
                     game_over = False
-                    noyade = False
-            elif not noyade:
+            elif mode_de_jeu == 1:
                 # touches (les arbres et les rochers bloquent le joueur)
-                if event.key == pygame.K_z and monde.peut_aller(0, -1):
-                    monde.joueur.deplacer_haut()
-                if event.key == pygame.K_s and monde.peut_aller(0, 1):
-                    monde.joueur.deplacer_bas()
-                if event.key == pygame.K_d and monde.peut_aller(1, 0):
-                    monde.joueur.deplacer_droite()
-                if event.key == pygame.K_q and monde.peut_aller(-1, 0):
-                    monde.joueur.deplacer_gauche()
+                if event.key == pygame.K_z:
+                    monde.deplacer_joueur(0, -1)
+                if event.key == pygame.K_s:
+                    monde.deplacer_joueur(0, 1)
+                if event.key == pygame.K_d:
+                    monde.deplacer_joueur(1, 0)
+                if event.key == pygame.K_q:
+                    monde.deplacer_joueur(-1, 0)
 
-                # saut dans l'eau sans nénuphar : plus de commandes, noyade à l'atterrissage
-                if monde.joueur_dans_eau():
-                    noyade = True
+    # actions du bot
+    if mode_de_jeu == 2 and not game_over:
+        temps_actuel = pygame.time.get_ticks()
+
+        if temps_actuel - dernier_deplacement >= cooldown:
+            if monde.camera_y > 0:
+                monde.deplacer_joueur(0, -1)
+                dernier_deplacement = temps_actuel
 
     if not game_over:
-        # logique : caméra, génération des lignes, véhicules, animation du joueur
+        # logique : caméra, génération des lignes, véhicules, rondins, animation du joueur
         monde.mettre_a_jour()
 
         # score = nombre de lignes gagnées depuis le départ
@@ -69,7 +77,10 @@ while running:
         if monde.joueur.contact(monde.liste_vehicules):
             game_over = True
             cause = "Écrasé !"
-        elif noyade and monde.joueur_pose():
+        elif monde.emporte:
+            game_over = True
+            cause = "Emporté par le courant !"
+        elif monde.joueur_pose() and monde.joueur_dans_eau():
             game_over = True
             cause = "Tu t'es noyé !"
 

@@ -11,18 +11,52 @@ class Player:
         self.x_visuel = float(rectangle.x)
         self.y_visuel = float(rectangle.y)
         self.hauteur_saut = 0.0
+        self.dernier_deplacement = 0
+        self.cooldown = 170
+
+    def peut_bouger(self):
+        return pygame.time.get_ticks() - self.dernier_deplacement >= self.cooldown
+
+    def sauter_vers(self, x, y):
+        """Place le joueur sur la case (x, y) si le cooldown est écoulé.
+        Utilisé par Monde.deplacer_joueur (qui gère obstacles, grille et rondins)."""
+        if not self.peut_bouger():
+            return False
+        self.rectangle.x = x
+        self.rectangle.y = y
+        self.dernier_deplacement = pygame.time.get_ticks()
+        return True
 
     def deplacer_haut(self):
-        self.rectangle.y -= self.vitesse
+
+        temps_actuel = pygame.time.get_ticks()
+
+        if temps_actuel - self.dernier_deplacement >= self.cooldown:
+
+            self.rectangle.y -= self.vitesse
+
+            self.dernier_deplacement = temps_actuel
 
     def deplacer_bas(self):
-        self.rectangle.y += self.vitesse
+        temps_actuel = pygame.time.get_ticks()
+        
+        if temps_actuel - self.dernier_deplacement >= self.cooldown:
+            self.rectangle.y += self.vitesse
+            self.dernier_deplacement = temps_actuel
 
     def deplacer_droite(self):
-        self.rectangle.x += self.vitesse
+        temps_actuel = pygame.time.get_ticks()
+        
+        if temps_actuel - self.dernier_deplacement >= self.cooldown:
+            self.rectangle.x += self.vitesse
+            self.dernier_deplacement = temps_actuel
 
     def deplacer_gauche(self):
-        self.rectangle.x -= self.vitesse
+        temps_actuel = pygame.time.get_ticks()
+
+        if temps_actuel - self.dernier_deplacement >= self.cooldown:
+            self.rectangle.x -= self.vitesse
+            self.dernier_deplacement = temps_actuel
 
     def animer(self):
         """Rapproche la position affichée de la position logique, avec un petit saut."""
@@ -30,7 +64,8 @@ class Player:
         dy = self.rectangle.y - self.y_visuel
         distance = math.hypot(dx, dy)
 
-        if distance < 0.5:
+        # seuil un peu tolérant : évite les petits rebonds quand un rondin porte le joueur
+        if distance < 1.5:
             self.x_visuel = float(self.rectangle.x)
             self.y_visuel = float(self.rectangle.y)
             self.hauteur_saut = 0.0

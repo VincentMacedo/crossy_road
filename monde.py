@@ -4,6 +4,7 @@ import pygame
 from player import Player
 from voiture import Voiture
 from train import Train
+from rondin import Rondin
 
 
 def assombrir(couleur, facteur):
@@ -26,18 +27,29 @@ class Decor:
 class Monde:
     # --- Monde (en "pixels de monde") ---
     TAILLE_LIGNE = 40
-    LARGEUR = 800                       # zone jouable : x de 0 à LARGEUR
+    LARGEUR = 400                       # zone jouable : x de 0 à LARGEUR
     NB_COLONNES = LARGEUR // TAILLE_LIGNE
     MARGE = 400                         # largeur de la forêt de chaque côté (sol en herbe)
     NB_COLONNES_FORET = MARGE // TAILLE_LIGNE
-    MARGE_VEHICULES = 160               # les véhicules disparaissent/apparaissent dans la forêt
+    MARGE_VEHICULES = MARGE             # véhicules et rondins circulent aussi hors du monde
 
     # --- Réglages du jeu ---
-    VOITURES_MIN = 4
-    VOITURES_MAX = 8
+    VOITURES_MIN = 5
+    VOITURES_MAX = 9
     DENSITE_ARBRES = 0.18               # arbres/rochers dans la zone jouable
-    DISTANCE_SECURITE = 100             # une voiture ralentit si elle s'approche trop de celle de devant
-    VITESSES_VOITURES = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]
+    DISTANCE_SECURITE = 60              # un véhicule ralentit s'il est à moins de 60 px de celui de devant
+    # genre de véhicule : (longueur, poids du tirage)
+    TYPES_VEHICULES = {"petite": (40, 4), "voiture": (60, 4), "camion": (100, 2)}
+    LONGUEUR_MAX_VEHICULE = 100
+    COULEURS_REMORQUES = [(235, 235, 240), (205, 205, 212), (230, 150, 60), (90, 130, 190), (120, 170, 110)]
+    # au moins autant de vitesses que VOITURES_MAX (une vitesse différente par voiture)
+    VITESSES_VOITURES = [1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.4, 3.8, 4.2, 4.6]
+    PROBA_RONDINS = 0.7                 # part des lignes d'eau avec des rondins (sinon : nénuphars)
+    PROBA_NENUPHAR_EXTRA = 0.06         # nénuphars en plus du chemin garanti
+    VITESSES_COURANT = [0.8, 1.2, 1.6, 2.0]
+    HAUTEUR_RONDIN = 8
+    FACTEUR_HORS_ZONE = 0.6             # assombrissement de ce qui dépasse du monde
+    TRAJET_RONDINS = LARGEUR + 2 * MARGE_VEHICULES + 160
 
     # --- Projection ---
     ZOOM = 1.5
@@ -80,15 +92,23 @@ class Monde:
         self.camera_x = self.joueur.rectangle.centerx
         self.camera_y = self.joueur.rectangle.centery
         self.z_joueur = self.STYLES["herbe"][1]
+        self.reste_courant = 0.0     # partie décimale du déplacement dû au courant
+        self.emporte = False         # True si le courant a emporté le joueur hors de la zone
 
     # ------------------------------------------------------------------
     # Génération des lignes (déterministe : même graine = même monde)
     # ------------------------------------------------------------------
     def colonne_passage(self, indice):
         """Colonne qui reste praticable entre la ligne `indice` et la suivante
-        (évite qu'un lac ou une rangée d'arbres bloque complètement la partie)."""
-        rng = random.Random(f"{self.graine}:passage:{indice}")
-        return rng.randrange(1, self.NB_COLONNES - 1)
+        (évite qu'une rangée d'arbres ou d'eau bloque complètement la partie).
+        Elle varie doucement d'une ligne à l'autre : les couloirs restent courts."""
+        rng = random.Random(f"{self.graine}:phases")
+        p1 = rng.uniform(0, 2 * math.pi)
+        p2 = rng.uniform(0, 2 * math.pi)
+        milieu = (self.NB_COLONNES - 1) / 2
+        col = (milieu + 0.3 * self.NB_COLONNES * math.sin(indice * 0.55 + p1)
+               + 0.15 * self.NB_COLONNES * math.sin(indice * 0.23 + p2))
+        return max(1, min(self.NB_COLONNES - 2, round(col)))
 
     def generer_ligne(self, indice):
         rng = random.Random(f"{self.graine}:{indice}")
@@ -108,6 +128,7 @@ class Monde:
             "indice": indice,
             "vehicules": [],   # voitures ou train de cette ligne
             "decor": {},       # colonne -> "arbre" / "rocher" / "nenuphar"
+            "rondins": [],     # troncs flottants (lignes d'eau avec courant)
         }
 
         if type_ligne == "herbe":
@@ -119,11 +140,12 @@ class Monde:
         elif type_ligne == "eau":
             self.remplir_eau(ligne, rng)
 
-        self.remplir_foret(ligne)
+        if type_ligne == "herbe":
+            self.remplir_foret(ligne)
         return ligne
 
     def remplir_foret(self, ligne):
-        """Forêt dense de chaque côté de la zone jouable, sur toutes les lignes."""
+        """Forêt dense de chaque côté de la zone jouable (lignes d'herbe)."""
         for k in range(1, self.NB_COLONNES_FORET + 1):
             ligne["decor"][-k] = "arbre"
             ligne["decor"][self.NB_COLONNES - 1 + k] = "arbre"
@@ -146,14 +168,21 @@ class Monde:
         y = ligne["rect"].y
         nb = rng.randint(self.VOITURES_MIN, self.VOITURES_MAX)
         sens = rng.choice([-1, 1])
-        # chaque voiture a sa propre vitesse (toutes différentes sur une même route)
+        # chaque véhicule a sa propre vitesse (toutes différentes sur une même route)
         vitesses = rng.sample(self.VITESSES_VOITURES, nb)
-        boucle = self.LARGEUR + 2 * self.MARGE_VEHICULES + 40
+        boucle = self.LARGEUR + 2 * self.MARGE_VEHICULES + self.LONGUEUR_MAX_VEHICULE
+        emplacement = boucle // nb
+        genres = list(self.TYPES_VEHICULES)
+        poids = [self.TYPES_VEHICULES[g][1] for g in genres]
         for k in range(nb):
-            x = -self.MARGE_VEHICULES - 40 + (k * boucle) // nb + rng.randint(0, 60)
-            couleur = rng.choice(self.COULEURS_VOITURES)
-            ligne["vehicules"].append(
-                Voiture(sens * vitesses[k], pygame.Rect(x, y, 40, 40), couleur))
+            genre = rng.choices(genres, weights=poids)[0]
+            longueur = self.TYPES_VEHICULES[genre][0]
+            jeu = max(0, emplacement - longueur - 30)       # espace libre entre deux véhicules
+            x = -self.MARGE_VEHICULES - self.LONGUEUR_MAX_VEHICULE + k * emplacement + rng.randint(0, jeu)
+            ligne["vehicules"].append(Voiture(
+                sens * vitesses[k], pygame.Rect(x, y, longueur, 40),
+                rng.choice(self.COULEURS_VOITURES), genre,
+                rng.choice(self.COULEURS_REMORQUES)))
 
     def remplir_rail(self, ligne, rng):
         y = ligne["rect"].y
@@ -163,15 +192,33 @@ class Monde:
         ligne["vehicules"].append(Train(vitesse, pygame.Rect(x, y, 200, 40)))
 
     def remplir_eau(self, ligne, rng):
+        if rng.random() < self.PROBA_RONDINS:
+            self.remplir_rondins(ligne, rng)
+        else:
+            self.remplir_nenuphars(ligne, rng)
+
+    def remplir_rondins(self, ligne, rng):
+        y = ligne["rect"].y
+        sens = rng.choice([-1, 1])
+        vitesse = sens * rng.choice(self.VITESSES_COURANT)    # même courant pour toute la ligne
+        nb = rng.randint(4, 6)
+        emplacement = self.TRAJET_RONDINS // nb
+        for k in range(nb):
+            largeur = rng.choice([80, 120, 160])
+            jeu = max(0, emplacement - largeur - 40)           # au moins 1 case entre deux rondins
+            x = -self.MARGE_VEHICULES - 160 + k * emplacement + rng.randint(0, jeu)
+            ligne["rondins"].append(Rondin(vitesse, pygame.Rect(x, y, largeur, 40)))
+
+    def remplir_nenuphars(self, ligne, rng):
         indice = ligne["indice"]
         g1 = self.colonne_passage(indice - 1)
         g2 = self.colonne_passage(indice)
         # chemin de nénuphars entre les deux colonnes de passage
         for col in range(min(g1, g2), max(g1, g2) + 1):
             ligne["decor"][col] = "nenuphar"
-        # quelques nénuphars en plus
+        # très peu de nénuphars en plus
         for col in range(self.NB_COLONNES):
-            if rng.random() < 0.25:
+            if rng.random() < self.PROBA_NENUPHAR_EXTRA:
                 ligne["decor"][col] = "nenuphar"
 
     # ------------------------------------------------------------------
@@ -183,12 +230,15 @@ class Monde:
         return [v for ligne in self.lignes.values() for v in ligne["vehicules"]]
 
     def deplacer_vehicules(self):
-        boucle = self.LARGEUR + 2 * self.MARGE_VEHICULES + 40
         for ligne in self.lignes.values():
             vehicules = ligne["vehicules"]
+            if not vehicules:
+                continue
+            longueur_max = max(self.LONGUEUR_MAX_VEHICULE, max(v.rectangle.width for v in vehicules))
+            boucle = self.LARGEUR + 2 * self.MARGE_VEHICULES + longueur_max
 
-            # vitesse du moment : celle de la voiture, ou celle de la voiture de devant
-            # si elle est plus lente et trop proche (pas de dépassement ni de superposition)
+            # vitesse du moment : celle du véhicule, ou celle du véhicule de devant
+            # s'il est plus lent et trop proche (pas de dépassement ni de superposition)
             nouvelles = {}
             for v in vehicules:
                 sens = 1 if v.vitesse_base > 0 else -1
@@ -196,7 +246,10 @@ class Monde:
                 for autre in vehicules:
                     if autre is v:
                         continue
-                    ecart = ((autre.x_reel - v.x_reel) * sens) % boucle
+                    if sens > 0:
+                        ecart = (autre.x_reel - (v.x_reel + v.rectangle.width)) % boucle
+                    else:
+                        ecart = (v.x_reel - (autre.x_reel + autre.rectangle.width)) % boucle
                     if ecart < self.DISTANCE_SECURITE and abs(autre.vitesse) < abs(vitesse):
                         vitesse = autre.vitesse
                 nouvelles[id(v)] = vitesse
@@ -205,57 +258,68 @@ class Monde:
                 v.vitesse = nouvelles[id(v)]
                 v.deplacer()
 
-                # sortie par un côté (dans la forêt) -> réapparition de l'autre côté
-                largeur = v.rectangle.width
-                trajet = self.LARGEUR + 2 * self.MARGE_VEHICULES + largeur
+                # sortie par un côté (hors de l'écran) -> réapparition de l'autre côté
                 if v.x_reel > self.LARGEUR + self.MARGE_VEHICULES:
-                    v.x_reel -= trajet
-                elif v.x_reel < -self.MARGE_VEHICULES - largeur:
-                    v.x_reel += trajet
+                    v.x_reel -= boucle
+                elif v.x_reel + v.rectangle.width < -self.MARGE_VEHICULES:
+                    v.x_reel += boucle
                 v.rectangle.x = round(v.x_reel)
 
-    def peut_aller(self, dcol, dlig):
-        """False si la case visée est hors zone ou occupée par un arbre / un rocher.
-        L'eau n'est pas bloquée : on peut y sauter, et on s'y noie s'il n'y a pas de nénuphar."""
+    def rondin_sous_joueur(self):
+        """Le rondin qui porte le joueur (ou None)."""
+        r = self.joueur.rectangle
+        ligne = self.lignes.get(r.y // self.TAILLE_LIGNE)
+        if ligne is None:
+            return None
+        for rondin in ligne["rondins"]:
+            if rondin.rectangle.left <= r.centerx <= rondin.rectangle.right:
+                return rondin
+        return None
+
+    def deplacer_rondins(self):
+        trajet = self.TRAJET_RONDINS
+        for ligne in self.lignes.values():
+            for rondin in ligne["rondins"]:
+                rondin.deplacer()
+                largeur = rondin.rectangle.width
+                if rondin.x_reel > self.LARGEUR + self.MARGE_VEHICULES:
+                    rondin.x_reel -= trajet
+                elif rondin.x_reel + largeur < -self.MARGE_VEHICULES:
+                    rondin.x_reel += trajet
+                rondin.rectangle.x = round(rondin.x_reel)
+
+    def deplacer_joueur(self, dcol, dlig):
+        """Saute d'une case. Refusé hors zone ou sur un arbre / un rocher.
+        L'eau n'est pas bloquée : on s'y noie sauf sur un rondin ou un nénuphar."""
         t = self.TAILLE_LIGNE
         r = self.joueur.rectangle
-        col = r.x // t + dcol
+        col = round(r.x / t) + dcol          # on se recale sur la grille (utile en quittant un rondin)
         indice = r.y // t + dlig
         if col < 0 or col >= self.NB_COLONNES:
-            return False
+            return
         ligne = self.lignes.get(indice)
-        if ligne is None:
-            return True
-        return ligne["decor"].get(col) not in ("arbre", "rocher")
+        if ligne is not None and ligne["decor"].get(col) in ("arbre", "rocher"):
+            return
+        self.joueur.sauter_vers(col * t, indice * t)   # respecte le cooldown du joueur
 
     def joueur_dans_eau(self):
-        """True si le joueur est sur une case d'eau sans nénuphar."""
-        t = self.TAILLE_LIGNE
+        """True si le joueur est sur de l'eau, sans rondin ni nénuphar pour le porter."""
         r = self.joueur.rectangle
-        ligne = self.lignes.get(r.y // t)
+        ligne = self.lignes.get(r.y // self.TAILLE_LIGNE)
         if ligne is None or ligne["type"] != "eau":
             return False
-        return ligne["decor"].get(r.x // t) != "nenuphar"
+        if self.rondin_sous_joueur() is not None:
+            return False
+        return ligne["decor"].get(r.centerx // self.TAILLE_LIGNE) != "nenuphar"
 
     def joueur_pose(self):
         """True quand le joueur a fini son saut (position affichée = position logique)."""
         j = self.joueur
-        return abs(j.x_visuel - j.rectangle.x) < 1 and abs(j.y_visuel - j.rectangle.y) < 1
+        return abs(j.x_visuel - j.rectangle.x) < 2 and abs(j.y_visuel - j.rectangle.y) < 1
 
     def mettre_a_jour(self):
         joueur = self.joueur
         r = joueur.rectangle
-
-        # le joueur reste dans la zone jouable
-        r.x = max(0, min(r.x, self.LARGEUR - r.width))
-
-        joueur.animer()
-
-        # la caméra suit le joueur (position visuelle, donc suit aussi le saut)
-        cible_x = joueur.x_visuel + r.width / 2
-        cible_y = joueur.y_visuel + r.height / 2
-        self.camera_x += (cible_x - self.camera_x) * 0.12
-        self.camera_y += (cible_y - self.camera_y) * 0.12
 
         # génération des lignes autour de la caméra
         ligne_cam = int(self.camera_y // self.TAILLE_LIGNE)
@@ -268,7 +332,32 @@ class Monde:
             if ligne_cam - 17 <= i <= ligne_cam + 17
         }
 
+        # le rondin qui porte le joueur (repéré avant que les rondins ne bougent)
+        support = self.rondin_sous_joueur()
         self.deplacer_vehicules()
+        self.deplacer_rondins()
+
+        if support is not None:
+            # le courant entraîne le joueur
+            self.reste_courant += support.vitesse
+            pas = int(self.reste_courant)
+            r.x += pas
+            self.reste_courant -= pas
+            joueur.x_visuel += support.vitesse
+            self.emporte = r.centerx < 0 or r.centerx > self.LARGEUR
+        else:
+            self.reste_courant = 0.0
+            self.emporte = False
+            # le joueur reste dans la zone jouable
+            r.x = max(0, min(r.x, self.LARGEUR - r.width))
+
+        joueur.animer()
+
+        # la caméra suit le joueur (position visuelle, donc suit aussi le saut)
+        cible_x = joueur.x_visuel + r.width / 2
+        cible_y = joueur.y_visuel + r.height / 2
+        self.camera_x += (cible_x - self.camera_x) * 0.12
+        self.camera_y += (cible_y - self.camera_y) * 0.12
 
     def hauteur_sol(self, indice):
         ligne = self.lignes.get(indice)
@@ -332,55 +421,65 @@ class Monde:
             if (col + ligne["indice"]) % 2 == 0:
                 self.dessine_dalle(col * t, y, t, t, hauteur, clair)
 
+    def teinte(self, couleur, col):
+        """Couleur normale dans le monde, plus sombre au-delà."""
+        if 0 <= col < self.NB_COLONNES:
+            return couleur
+        return assombrir(couleur, self.FACTEUR_HORS_ZONE)
+
     def dessine_ligne(self, ligne):
         t = self.TAILLE_LIGNE
         type_ligne = ligne["type"]
         indice = ligne["indice"]
         couleur, hauteur = self.STYLES[type_ligne]
-        herbe_couleur, herbe_hauteur = self.STYLES["herbe"]
         y = ligne["rect"].y
+        nb = self.NB_COLONNES
 
         # colonnes visibles autour de la caméra
         col_min = max(-self.MARGE // t, int(self.camera_x // t) - 12)
         col_max = min((self.LARGEUR + self.MARGE) // t, int(self.camera_x // t) + 12)
-        zone_min = max(col_min, 0)
-        zone_max = min(col_max, self.NB_COLONNES)
 
         if type_ligne == "herbe":
+            herbe_couleur, herbe_hauteur = self.STYLES["herbe"]
             self.dessine_boite(-self.MARGE, y, self.LARGEUR + 2 * self.MARGE, t,
                                -self.EPAISSEUR, herbe_hauteur + self.EPAISSEUR, herbe_couleur)
             self.dessine_damier_herbe(ligne, col_min, col_max)
             return
 
-        # forêt à gauche (plus loin), puis la ligne, puis forêt à droite (plus près)
-        self.dessine_boite(-self.MARGE, y, self.MARGE, t,
-                           -self.EPAISSEUR, herbe_hauteur + self.EPAISSEUR, herbe_couleur)
-        self.dessine_boite(0, y, self.LARGEUR, t, -self.EPAISSEUR, hauteur + self.EPAISSEUR, couleur)
-        self.dessine_boite(self.LARGEUR, y, self.MARGE, t,
-                           -self.EPAISSEUR, herbe_hauteur + self.EPAISSEUR, herbe_couleur)
-        self.dessine_damier_herbe(ligne, col_min, min(col_max, 0))
-        self.dessine_damier_herbe(ligne, max(col_min, self.NB_COLONNES), col_max)
+        # sol : monde en couleur normale, parties qui dépassent en version plus sombre
+        sombre = assombrir(couleur, self.FACTEUR_HORS_ZONE)
+        epaisseur = hauteur + self.EPAISSEUR
+        self.dessine_boite(-self.MARGE, y, self.MARGE, t, -self.EPAISSEUR, epaisseur, sombre)
+        self.dessine_boite(0, y, self.LARGEUR, t, -self.EPAISSEUR, epaisseur, couleur)
+        self.dessine_boite(self.LARGEUR, y, self.MARGE, t, -self.EPAISSEUR, epaisseur, sombre)
 
         if type_ligne == "route":
-            for col in range(zone_min, zone_max):
+            for col in range(col_min, col_max):
                 if col % 2 == 0:
-                    self.dessine_dalle(col * t + 6, y + t / 2 - 2, 28, 4, hauteur, (230, 230, 220))
+                    self.dessine_dalle(col * t + 6, y + t / 2 - 2, 28, 4, hauteur,
+                                       self.teinte((230, 230, 220), col))
 
         elif type_ligne == "chemin_de_fer":
-            for col in range(zone_min, zone_max):
-                self.dessine_dalle(col * t + 14, y + 2, 12, t - 4, hauteur, (110, 80, 55))
-            for decalage in (8, 27):
-                self.dessine_boite(zone_min * t, y + decalage, (zone_max - zone_min) * t, 4,
-                                   hauteur, 2, (170, 170, 180))
+            for col in range(col_min, col_max):
+                self.dessine_dalle(col * t + 14, y + 2, 12, t - 4, hauteur,
+                                   self.teinte((110, 80, 55), col))
+            segments = [(col_min, min(col_max, 0), self.FACTEUR_HORS_ZONE),
+                        (max(col_min, 0), min(col_max, nb), 1.0),
+                        (max(col_min, nb), col_max, self.FACTEUR_HORS_ZONE)]
+            for debut_seg, fin_seg, facteur in segments:
+                if debut_seg < fin_seg:
+                    for decalage in (8, 27):
+                        self.dessine_boite(debut_seg * t, y + decalage, (fin_seg - debut_seg) * t, 4,
+                                           hauteur, 2, assombrir((170, 170, 180), facteur))
 
         elif type_ligne == "eau":
             clair = eclaircir(couleur, 40)
-            for col in range(zone_min, zone_max):
+            for col in range(col_min, col_max):
                 if (col + indice) % 3 == 0:
-                    self.dessine_dalle(col * t + 6, y + 14, 28, 5, hauteur, clair)
+                    self.dessine_dalle(col * t + 6, y + 14, 28, 5, hauteur, self.teinte(clair, col))
             # nénuphars
             for col, genre in ligne["decor"].items():
-                if genre == "nenuphar" and zone_min <= col < zone_max:
+                if genre == "nenuphar" and col_min <= col < col_max:
                     cx, cy = col * t + t / 2, y + t / 2
                     self.dessine_disque(cx, cy, 16, hauteur + 0.5, (60, 165, 90))
                     self.dessine_disque(cx, cy, 10, hauteur + 0.6, (90, 200, 115))
@@ -390,16 +489,42 @@ class Monde:
     # ------------------------------------------------------------------
     def dessine_voiture(self, v, base):
         r = v.rectangle
-        x, y, l, p = r.x, r.y + 6, r.width, r.height - 12
-        self.dessine_dalle(x, y, l, p, base, assombrir(self.STYLES["route"][0], 0.6))
-        self.dessine_boite(x, y, l, p, base + 2, 12, v.couleur)
-        self.dessine_boite(x + 8, y + 3, l - 16, p - 6, base + 14, 9, (235, 240, 245))
+        sens = 1 if v.vitesse_base > 0 else -1
+        x, y, l = r.x, r.y + 6, r.width
+        p = r.height - 12                                    # profondeur du véhicule
+        vitre = (225, 235, 245)
+
+        self.dessine_dalle(x, y, l, p, base, assombrir(self.STYLES["route"][0], 0.6))   # ombre
+        self.dessine_boite(x + 2, y + 1, l - 4, p - 2, base, 3, (35, 35, 40))            # châssis / roues
+
+        if v.genre == "petite":
+            self.dessine_boite(x, y + 2, l, p - 4, base + 3, 8, v.couleur)
+            self.dessine_boite(x + 9, y + 5, l - 18, p - 10, base + 11, 7, vitre)
+
+        elif v.genre == "camion":
+            cabine = 28
+            x_cabine = x + l - cabine if sens > 0 else x           # la cabine est à l'avant
+            x_remorque = x if sens > 0 else x + cabine
+            self.dessine_boite(x_remorque, y, l - cabine, p, base + 3, 24, v.couleur_remorque)
+            self.dessine_boite(x_cabine, y + 1, cabine, p - 2, base + 3, 17, v.couleur)
+            self.dessine_boite(x_cabine + 6, y + 5, cabine - 12, p - 10, base + 20, 3, vitre)
+
+        else:  # voiture
+            self.dessine_boite(x, y + 1, l, p - 2, base + 3, 10, v.couleur)
+            self.dessine_boite(x + 14, y + 4, l - 28, p - 8, base + 13, 8, vitre)
 
     def dessine_train(self, t, base):
         r = t.rectangle
         x, y, l, p = r.x, r.y + 2, r.width, r.height - 4
         self.dessine_boite(x, y, l, p, base + 2, 30, t.couleur)
         self.dessine_boite(x + 4, y + 4, l - 8, p - 8, base + 32, 4, eclaircir(t.couleur, 50))
+
+    def dessine_rondin(self, g, base):
+        r = g.rectangle
+        haut = base + self.HAUTEUR_RONDIN
+        self.dessine_boite(r.x, r.y + 5, r.width, 30, base, self.HAUTEUR_RONDIN, (140, 98, 58))
+        self.dessine_dalle(r.x + 4, r.y + 11, r.width - 8, 3, haut, (165, 120, 75))
+        self.dessine_dalle(r.x + 4, r.y + 22, r.width - 8, 3, haut, (165, 120, 75))
 
     def dessine_joueur(self, j):
         x = j.x_visuel + 8
@@ -431,6 +556,8 @@ class Monde:
         y = indice * self.TAILLE_LIGNE
         if isinstance(objet, Player):
             self.dessine_joueur(objet)
+        elif isinstance(objet, Rondin):
+            self.dessine_rondin(objet, base)
         elif isinstance(objet, Train):
             self.dessine_train(objet, base)
         elif isinstance(objet, Decor):
@@ -467,6 +594,9 @@ class Monde:
         par_ligne = {}
         for vehicule in self.liste_vehicules:
             par_ligne.setdefault(vehicule.rectangle.centery // t, []).append(vehicule)
+        for ligne in self.lignes.values():
+            for rondin in ligne["rondins"]:
+                par_ligne.setdefault(ligne["indice"], []).append(rondin)
 
         indice_joueur = int((self.joueur.y_visuel + self.joueur.rectangle.height / 2) // t)
         par_ligne.setdefault(indice_joueur, []).append(self.joueur)
@@ -475,7 +605,9 @@ class Monde:
         cible_z = self.hauteur_sol(indice_joueur)
         ligne_joueur = self.lignes.get(indice_joueur)
         col_joueur = int((self.joueur.x_visuel + self.joueur.rectangle.width / 2) // t)
-        if ligne_joueur and ligne_joueur["decor"].get(col_joueur) == "nenuphar":
+        if self.rondin_sous_joueur() is not None:
+            cible_z += self.HAUTEUR_RONDIN
+        elif ligne_joueur and ligne_joueur["decor"].get(col_joueur) == "nenuphar":
             cible_z += 1
         self.z_joueur += (cible_z - self.z_joueur) * 0.35
 
