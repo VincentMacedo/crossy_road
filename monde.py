@@ -259,9 +259,9 @@ class Monde:
                 v.deplacer()
 
                 # sortie par un côté (hors de l'écran) -> réapparition de l'autre côté
-                if v.x_reel > self.LARGEUR + self.MARGE_VEHICULES:
+                if v.vitesse_base > 0 and v.x_reel > self.LARGEUR + self.MARGE_VEHICULES:
                     v.x_reel -= boucle
-                elif v.x_reel + v.rectangle.width < -self.MARGE_VEHICULES:
+                elif v.vitesse_base < 0 and v.x_reel + v.rectangle.width < -self.MARGE_VEHICULES:
                     v.x_reel += boucle
                 v.rectangle.x = round(v.x_reel)
 
@@ -282,9 +282,9 @@ class Monde:
             for rondin in ligne["rondins"]:
                 rondin.deplacer()
                 largeur = rondin.rectangle.width
-                if rondin.x_reel > self.LARGEUR + self.MARGE_VEHICULES:
+                if rondin.vitesse > 0 and rondin.x_reel > self.LARGEUR + self.MARGE_VEHICULES:
                     rondin.x_reel -= trajet
-                elif rondin.x_reel + largeur < -self.MARGE_VEHICULES:
+                elif rondin.vitesse < 0 and rondin.x_reel + largeur < -self.MARGE_VEHICULES:
                     rondin.x_reel += trajet
                 rondin.rectangle.x = round(rondin.x_reel)
 
@@ -369,7 +369,7 @@ class Monde:
 
     #code bot poulet
 
-        def envelopper(self, x, largeur, vitesse, boucle, longueur_ref):
+    def envelopper(self, x, largeur, vitesse, boucle, longueur_ref):
         """Ramène x dans la fenêtre de circulation (même règle que lors du vrai déplacement)."""
         if vitesse >= 0:
             debut = -self.MARGE_VEHICULES - longueur_ref
@@ -443,35 +443,107 @@ class Monde:
         return any(zone.colliderect(rect) for rect in rects)
 
 
+
+
+
+    def danger_devant(self, dcol=0, dlig=-1, marge=0, position=None, etat=None):
+            t = self.TAILLE_LIGNE
+            if position is None:
+                r = self.joueur.rectangle
+                col, indice_depart = round(r.x / t), r.y // t
+            else:
+                col, indice_depart = position
+            col += dcol
+            indice = indice_depart + dlig
     
+            if col < 0 or col >= self.NB_COLONNES:
+                return True                       # hors du monde : on ne peut pas y aller
+    
+            ligne = self.lignes.get(indice)
+            if ligne is None:
+                return False                      # ligne pas encore chargée
+    
+    
+            if etat is None:
+                rects = [v.rectangle for v in ligne["vehicules"]]
+            else:
+                rects = etat.get(indice, {}).get("vehicules", [])
+    
+            case = pygame.Rect(col * t, indice * t, t, t)
+            zone = case.inflate(2 * marge, 0)
+            return any(zone.colliderect(rect) for rect in rects)
+
+
+
 
     def matrice(self, n):
         taille = 2 * n + 1
         centre = n
         matrice = [
-            [0 if abs(i - centre) + abs(j - centre) <= n else None for j in range(taille)]
+            [[0] if abs(i - centre) + abs(j - centre) <= n else [-5] for j in range(taille)]
             for i in range(taille)
         ]
         return matrice
 
-    def remplir_matrice(self,n):
-        m=self.matrice(n)
-        if  self.obstacle_devant(0, -1)==False: #devant
-            m[0][1]=3
-        if  self.obstacle_devant(0, 1)==False: #derrière
-            m[2][1]=1
-        if  self.obstacle_devant(-1, 0)==False: #gauche
-            m[1][0]=2
-        if  self.obstacle_devant(1, 0)==False: #droite
-            m[1][2]=2
-        return m
+
+    def remplir_chemin_position(self,chemin,x,y,etat):
+        #x y position joueur
+        #etat etat du monde à ce moment de prédiction
+        liste_chemin=[]
+        c=[]
+        c.append(chemin)
+        if  self.obstacle_devant(0, -1, etat)==False: #devant
+            
+            c=[x-1 ,y ,2]
+            liste_chemin.append(c)
+
+        if  self.obstacle_devant(0, 1, etat)==False: #derrière
+            c=[x+1 ,y ,-1]
+            liste_chemin.append(c)
+
+        if  self.obstacle_devant(-1, 0, etat)==False: #gauche
+            c=[x ,y-1 , 0]
+            liste_chemin.append(c)
+
+        if  self.obstacle_devant(1, 0, etat )==False: #droite
+            c=[x ,y+1 ,0]
+            liste_chemin.append(c)
+
+        return liste_chemin
 
     def affiche_matrice(self,m):
         for i in range (0, len(m)):
             print(m[i])
 
-    def analyse(self):
-        return False
+    def affiche_liste(self,L):
+        for i in range (len(L)):
+            print(L[i])
+
+    def analyse(self,generation,x,y):
+        #generation : nombre de cases prédites à l'avance
+        liste_liste_chemin=[] #liste de tous les chemins
+        c=[x,y,0] #chemin initial
+        liste_liste_chemin.append(c)
+
+        for i in range (0,generation):
+            etat = self.simulation(10*i) #i instances de temps
+            liste_liste_tampon=[]
+
+
+
+            for k in range (0, len(liste_liste_chemin)):
+                liste_nouvelles_valeurs=self.remplir_chemin_position(liste_liste_chemin[k],x,y,etat)
+                #for w in range (len(liste_nouvelles_valeurs)):
+                    #liste_liste_tampon.append(liste_nouvelles_valeurs[w])
+                liste_liste_tampon.append(liste_nouvelles_valeurs)
+
+
+
+            liste_liste_chemin=[]       
+            for k in range (len(liste_liste_tampon)):
+                liste_liste_chemin.append(liste_liste_tampon[k])        
+
+        return liste_liste_chemin
 
     
 

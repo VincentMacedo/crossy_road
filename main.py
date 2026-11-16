@@ -36,7 +36,36 @@ clock = pygame.time.Clock()
 running = True
 
 
-monde.affiche_matrice(monde.remplir_matrice(1))
+"""""
+c=[0,0,0]
+liste_liste_chemin=[]
+liste_chemin=monde.remplir_chemin_position(c,2,2,0)
+
+for i in range (0,4):
+    c1=[[2,3,2]] #devant
+    c1.append(monde.remplir_chemin_position(liste_chemin[0],2,3,10)[i])
+    liste_liste_chemin.append(c1) 
+
+    c2=[[2,1,-1]] #derrière
+    c2.append(monde.remplir_chemin_position(liste_chemin[1],2,1,10)[i])
+    liste_liste_chemin.append(c2) 
+
+    c3=[[1,2,0]] #gauche
+    c3.append(monde.remplir_chemin_position(liste_chemin[2],1,2,10)[i])
+    liste_liste_chemin.append(c3) 
+
+    c4=[[3,2,0]] #droite
+    c4.append(monde.remplir_chemin_position(liste_chemin[3],3,2,10)[i])
+    liste_liste_chemin.append(c4) 
+
+
+monde.affiche_liste(liste_liste_chemin)
+"""""
+
+liste_liste_chemin=monde.analyse(3,0,0)
+monde.affiche_liste(liste_liste_chemin)
+
+
 
 while running:
     for event in pygame.event.get():
