@@ -36,7 +36,7 @@ clock = pygame.time.Clock()
 running = True
 
 
-
+monde.affiche_matrice(monde.remplir_matrice(1))
 
 while running:
     for event in pygame.event.get():

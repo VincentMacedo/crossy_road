@@ -367,33 +367,108 @@ class Monde:
             return 0
         return self.STYLES[ligne["type"]][1]
 
-    #code bot pouulet
+    #code bot poulet
 
-    def obstacle_devant(self, dcol=0, dlig=-1, marge=0):
-        """True s'il y a un arbre, un rocher, une voiture/un camion ou un train sur la case visée.
-        Par défaut : la case juste devant le joueur (dlig=-1).
-        marge : détecte aussi les véhicules qui sont à moins de `marge` pixels de la case."""
+        def envelopper(self, x, largeur, vitesse, boucle, longueur_ref):
+        """Ramène x dans la fenêtre de circulation (même règle que lors du vrai déplacement)."""
+        if vitesse >= 0:
+            debut = -self.MARGE_VEHICULES - longueur_ref
+        else:
+            debut = -self.MARGE_VEHICULES - largeur
+        return debut + (x - debut) % boucle
+
+    def simulation(self, t):
+        """Instantané du monde dans `t` images, sans modifier le vrai monde.
+        Renvoie {indice_ligne: {"vehicules": [Rect, ...], "rondins": [Rect, ...]}}.
+        Approximation : chaque véhicule garde sa vitesse actuelle (le freinage
+        derrière un véhicule plus lent n'est pas simulé)."""
+        etat = {}
+        for indice, ligne in self.lignes.items():
+            vehicules, rondins = [], []
+
+            if ligne["vehicules"]:
+                longueur_max = max(self.LONGUEUR_MAX_VEHICULE,
+                                   max(v.rectangle.width for v in ligne["vehicules"]))
+                boucle = self.LARGEUR + 2 * self.MARGE_VEHICULES + longueur_max
+                for v in ligne["vehicules"]:
+                    x = self.envelopper(v.x_reel + v.vitesse * t, v.rectangle.width,
+                                        v.vitesse, boucle, longueur_max)
+                    rect = v.rectangle.copy()          # copie : l'original n'est pas touché
+                    rect.x = round(x)
+                    vehicules.append(rect)
+
+            if ligne["rondins"]:
+                longueur_ref = self.TRAJET_RONDINS - self.LARGEUR - 2 * self.MARGE_VEHICULES
+                for g in ligne["rondins"]:
+                    x = self.envelopper(g.x_reel + g.vitesse * t, g.rectangle.width,
+                                        g.vitesse, self.TRAJET_RONDINS, longueur_ref)
+                    rect = g.rectangle.copy()
+                    rect.x = round(x)
+                    rondins.append(rect)
+
+            etat[indice] = {"vehicules": vehicules, "rondins": rondins}
+        return etat
+
+    def obstacle_devant(self, dcol=0, dlig=-1, marge=0, position=None, etat=None):
+        """True s'il y a un arbre, un rocher, un véhicule ou un train sur la case visée.
+        position : (colonne, ligne) de départ en cases. Par défaut : le joueur réel.
+        etat     : instantané renvoyé par simulation(t). Par défaut : le monde réel maintenant.
+        marge    : un véhicule à moins de `marge` pixels (sur les côtés) de la case compte."""
         t = self.TAILLE_LIGNE
-        r = self.joueur.rectangle
-        col = round(r.x / t) + dcol
-        indice = r.y // t + dlig
+        if position is None:
+            r = self.joueur.rectangle
+            col, indice_depart = round(r.x / t), r.y // t
+        else:
+            col, indice_depart = position
+        col += dcol
+        indice = indice_depart + dlig
+
+        if col < 0 or col >= self.NB_COLONNES:
+            return True                       # hors du monde : on ne peut pas y aller
 
         ligne = self.lignes.get(indice)
         if ligne is None:
-            return False
+            return False                      # ligne pas encore chargée
 
-        # 1. arbre ou rocher : lu dans le dictionnaire du décor de la ligne
         if ligne["decor"].get(col) in ("arbre", "rocher"):
             return True
 
-        # 2. voiture, camion ou train : on teste si leur rectangle touche la case visée
-        case = pygame.Rect(col * t, indice * t, t, t)
-        zone = case.inflate(2 * marge, 0)        # élargie sur les côtés de `marge` pixels
-        for vehicule in ligne["vehicules"]:
-            if zone.colliderect(vehicule.rectangle):
-                return True
+        if etat is None:
+            rects = [v.rectangle for v in ligne["vehicules"]]
+        else:
+            rects = etat.get(indice, {}).get("vehicules", [])
 
-        return False
+        case = pygame.Rect(col * t, indice * t, t, t)
+        zone = case.inflate(2 * marge, 0)
+        return any(zone.colliderect(rect) for rect in rects)
+
+
+    
+
+    def matrice(self, n):
+        taille = 2 * n + 1
+        centre = n
+        matrice = [
+            [0 if abs(i - centre) + abs(j - centre) <= n else None for j in range(taille)]
+            for i in range(taille)
+        ]
+        return matrice
+
+    def remplir_matrice(self,n):
+        m=self.matrice(n)
+        if  self.obstacle_devant(0, -1)==False: #devant
+            m[0][1]=3
+        if  self.obstacle_devant(0, 1)==False: #derrière
+            m[2][1]=1
+        if  self.obstacle_devant(-1, 0)==False: #gauche
+            m[1][0]=2
+        if  self.obstacle_devant(1, 0)==False: #droite
+            m[1][2]=2
+        return m
+
+    def affiche_matrice(self,m):
+        for i in range (0, len(m)):
+            print(m[i])
 
     def analyse(self):
         return False
