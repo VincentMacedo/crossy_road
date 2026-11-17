@@ -37,9 +37,7 @@ running = True
 
 
 
-liste_liste_chemin=monde.analyse(3,0,0)
-monde.affiche_liste(liste_liste_chemin)
-print(monde.meilleur_chemin(liste_liste_chemin))
+
 
 
 while running:
@@ -69,21 +67,18 @@ while running:
     if mode_de_jeu == 2 and not game_over:
         temps_actuel = pygame.time.get_ticks()
         if temps_actuel - dernier_deplacement >= cooldown:
-            if  monde.obstacle_devant(0, -1)==False:
-                monde.deplacer_joueur(0, -1) #haut
-                dernier_deplacement = temps_actuel
 
-            if  monde.obstacle_devant(1, 0)==False:
-                monde.deplacer_joueur(1, 0) #droite
-                dernier_deplacement = temps_actuel
+            col, ligne = monde.case_visee(0, 0)
+            liste_liste_chemin = monde.analyse(5, ligne, col)     # x = ligne, y = colonne
+            best = monde.meilleur_chemin(liste_liste_chemin)
 
-            if  monde.obstacle_devant(-1, 0)==False:
-                monde.deplacer_joueur(-1, 0) #gauche
+            if best is not None:                    # sinon : aucun chemin, le bot attend
+                premier = best[1][1]                # première action du chemin
+                dligne = premier[0] - ligne         # -1 = devant, +1 = derrière
+                dcol = premier[1] - col             # -1 = gauche, +1 = droite
+                monde.deplacer_joueur(dcol, dligne)
                 dernier_deplacement = temps_actuel
-
-            if  monde.obstacle_devant(0, 1)==False:
-                monde.deplacer_joueur(0, 1) #derrière
-                dernier_deplacement = temps_actuel
+            
 
             
 

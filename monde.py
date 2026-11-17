@@ -34,19 +34,20 @@ class Monde:
     MARGE_VEHICULES = MARGE             # véhicules et rondins circulent aussi hors du monde
 
     # --- Réglages du jeu ---
-    VOITURES_MIN = 5
-    VOITURES_MAX = 9
+    VOITURES_MIN = 3
+    VOITURES_MAX = 6
     DENSITE_ARBRES = 0.18               # arbres/rochers dans la zone jouable
-    DISTANCE_SECURITE = 60              # un véhicule ralentit s'il est à moins de 60 px de celui de devant
+    ECART_MIN = 100                     # espace libre minimal entre deux véhicules d'une route (px)
+    DISTANCE_SECURITE = ECART_MIN + 10
     # genre de véhicule : (longueur, poids du tirage)
     TYPES_VEHICULES = {"petite": (40, 4), "voiture": (60, 4), "camion": (100, 2)}
     LONGUEUR_MAX_VEHICULE = 100
     COULEURS_REMORQUES = [(235, 235, 240), (205, 205, 212), (230, 150, 60), (90, 130, 190), (120, 170, 110)]
     # au moins autant de vitesses que VOITURES_MAX (une vitesse différente par voiture)
-    VITESSES_VOITURES = [1.0, 1.4, 1.8, 2.2, 2.6, 3.0, 3.4, 3.8, 4.2, 4.6]
+    VITESSES_VOITURES = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5]
     PROBA_RONDINS = 0.7                 # part des lignes d'eau avec des rondins (sinon : nénuphars)
     PROBA_NENUPHAR_EXTRA = 0.06         # nénuphars en plus du chemin garanti
-    VITESSES_COURANT = [0.8, 1.2, 1.6, 2.0]
+    VITESSES_COURANT = [0.8, 1.2, 1.6]
     HAUTEUR_RONDIN = 8
     FACTEUR_HORS_ZONE = 0.6             # assombrissement de ce qui dépasse du monde
     TRAJET_RONDINS = LARGEUR + 2 * MARGE_VEHICULES + 160
@@ -177,7 +178,7 @@ class Monde:
         for k in range(nb):
             genre = rng.choices(genres, weights=poids)[0]
             longueur = self.TYPES_VEHICULES[genre][0]
-            jeu = max(0, emplacement - longueur - 30)       # espace libre entre deux véhicules
+            jeu = max(0, emplacement - longueur - self.ECART_MIN)   # laisse au moins ECART_MIN entre deux véhicules
             x = -self.MARGE_VEHICULES - self.LONGUEUR_MAX_VEHICULE + k * emplacement + rng.randint(0, jeu)
             ligne["vehicules"].append(Voiture(
                 sens * vitesses[k], pygame.Rect(x, y, longueur, 40),
@@ -377,11 +378,12 @@ class Monde:
             debut = -self.MARGE_VEHICULES - largeur
         return debut + (x - debut) % boucle
 
-    def simulation(self, t):
+    def simulation(self, t, duree=0):
         """Instantané du monde dans `t` images, sans modifier le vrai monde.
-        Renvoie {indice_ligne: {"vehicules": [Rect, ...], "rondins": [Rect, ...]}}.
-        Approximation : chaque véhicule garde sa vitesse actuelle (le freinage
-        derrière un véhicule plus lent n'est pas simulé)."""
+        Si `duree` > 0, chaque véhicule est représenté par la zone qu'il balaie entre
+        t et t + duree (un joueur qui reste `duree` images sur une case y est exposé
+        pendant tout ce temps, pas seulement à l'instant t).
+        Renvoie {indice_ligne: {"vehicules": [Rect, ...], "rondins": [Rect, ...]}}."""
         etat = {}
         for indice, ligne in self.lignes.items():
             vehicules, rondins = [], []
@@ -393,8 +395,14 @@ class Monde:
                 for v in ligne["vehicules"]:
                     x = self.envelopper(v.x_reel + v.vitesse * t, v.rectangle.width,
                                         v.vitesse, boucle, longueur_max)
-                    rect = v.rectangle.copy()          # copie : l'original n'est pas touché
+                    rect = v.rectangle.copy()
                     rect.x = round(x)
+                    parcours = round(abs(v.vitesse) * duree)       # distance parcourue pendant `duree`
+                    if v.vitesse > 0:
+                        rect.width += parcours                     # la zone s'étend vers l'avant
+                    else:
+                        rect.x -= parcours
+                        rect.width += parcours
                     vehicules.append(rect)
 
             if ligne["rondins"]:
@@ -493,6 +501,7 @@ class Monde:
             (0, 1, x + 1, y, -1),    # derrière
             (-1, 0, x, y - 1, 0),    # gauche
             (1, 0, x, y + 1, 0),     # droite
+            (0, 0, x, y, 0),         # attendre sur place
         ]
         for dcol, dlig, nouveau_x, nouveau_y, score in mouvements:
             position = (y, x)        # obstacle_devant attend (colonne, ligne) : y puis x
@@ -505,25 +514,22 @@ class Monde:
 
     
 
-    def meilleur_chemin(self,L):
-        meilleur=L[0]
-        max=0
-        for k in range (len(L[0])):
-            max+=L[0][k][2]
+    def meilleur_chemin(self, L):
+        if len(L) == 0:                      # aucun chemin possible
+            return None
 
-        for i in range (len(L)):
-            somme=0
-            for k in range (len(L[i])):
-                somme+=L[i][k][2]
-            if somme>max:
-                max=somme
-                meilleur=L[i]
+        def valeur(chemin):
+            net = chemin[0][0] - chemin[-1][0]                    # lignes gagnées
+            reculs = sum(1 for c in chemin[1:] if c[2] == -1)
+            attentes = sum(1 for a, b in zip(chemin, chemin[1:]) if (a[0], a[1]) == (b[0], b[1]))
+            return 10 * net - 2 * reculs - 1 * attentes
 
-        return max,meilleur
+        meilleur = max(L, key=valeur)        # max garde le premier en cas d'égalité
+        return valeur(meilleur), meilleur
 
             
             
-        return False
+
 
 
     def affiche_matrice(self,m):
@@ -534,24 +540,17 @@ class Monde:
         for i in range (len(L)):
             print(L[i])
 
-    def analyse(self, generation, x, y):
-        # generation : nombre de cases prédites à l'avance
-        # x = ligne, y = colonne de départ
-        chemin_initial = [[x, y, 0]]              # un chemin = liste de choix [x, y, valeur]
-        liste_liste_chemin = [chemin_initial]     # liste de tous les chemins
-
+    def analyse(self, generation, x, y, pas=10):
+        # pas : nombre d'images entre deux sauts du joueur
+        chemin_initial = [[x, y, 0]]
+        liste_liste_chemin = [chemin_initial]
         for i in range(0, generation):
-            etat = self.simulation(10 * i)        # état du monde pour le saut numéro i
+            etat = self.simulation(pas * i, pas)      # le joueur saute à t = pas*i et y reste `pas` images
             liste_liste_tampon = []
-
             for chemin in liste_liste_chemin:
-                # on repart de la dernière case du chemin, pas de la case de départ
                 x_fin, y_fin = chemin[-1][0], chemin[-1][1]
-                liste_nouvelles_valeurs = self.remplir_chemin_position(chemin, x_fin, y_fin, etat)
-                liste_liste_tampon += liste_nouvelles_valeurs     # += : on ajoute les chemins un par un
-
+                liste_liste_tampon += self.remplir_chemin_position(chemin, x_fin, y_fin, etat)
             liste_liste_chemin = liste_liste_tampon
-
         return liste_liste_chemin
 
     
