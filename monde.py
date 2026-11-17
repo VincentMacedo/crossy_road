@@ -409,69 +409,65 @@ class Monde:
             etat[indice] = {"vehicules": vehicules, "rondins": rondins}
         return etat
 
-    def obstacle_devant(self, dcol=0, dlig=-1, marge=0, position=None, etat=None):
-        """True s'il y a un arbre, un rocher, un véhicule ou un train sur la case visée.
+    def case_visee(self, dcol, dlig, position=None):
+        """(colonne, ligne) de la case visée, à partir de `position` ou du joueur réel."""
+        t = self.TAILLE_LIGNE
+        if position is None:
+            r = self.joueur.rectangle
+            col, indice = round(r.x / t), r.y // t
+        else:
+            col, indice = position
+        return col + dcol, indice + dlig
+
+    def obstacle_devant(self, dcol=0, dlig=-1, position=None):
+        """True si la case visée est infranchissable : hors du monde, arbre ou rocher.
+        Ces obstacles ne bougent pas : pas besoin de simulation."""
+        col, indice = self.case_visee(dcol, dlig, position)
+        if col < 0 or col >= self.NB_COLONNES:
+            return True
+        ligne = self.lignes.get(indice)
+        if ligne is None:
+            return False                      # ligne pas encore chargée
+        return ligne["decor"].get(col) in ("arbre", "rocher")
+
+    def danger_devant(self, dcol=0, dlig=-1, marge=0, position=None, etat=None):
+        """True si se tenir sur la case visée serait mortel : voiture, camion ou train,
+        ou eau sans rondin ni nénuphar pour porter le joueur.
         position : (colonne, ligne) de départ en cases. Par défaut : le joueur réel.
         etat     : instantané renvoyé par simulation(t). Par défaut : le monde réel maintenant.
         marge    : un véhicule à moins de `marge` pixels (sur les côtés) de la case compte."""
         t = self.TAILLE_LIGNE
-        if position is None:
-            r = self.joueur.rectangle
-            col, indice_depart = round(r.x / t), r.y // t
-        else:
-            col, indice_depart = position
-        col += dcol
-        indice = indice_depart + dlig
+        col, indice = self.case_visee(dcol, dlig, position)
 
         if col < 0 or col >= self.NB_COLONNES:
-            return True                       # hors du monde : on ne peut pas y aller
-
+            return False                      # hors du monde : c'est un obstacle, pas un danger
         ligne = self.lignes.get(indice)
         if ligne is None:
-            return False                      # ligne pas encore chargée
-
-        if ligne["decor"].get(col) in ("arbre", "rocher"):
-            return True
+            return False
 
         if etat is None:
-            rects = [v.rectangle for v in ligne["vehicules"]]
+            vehicules = [v.rectangle for v in ligne["vehicules"]]
+            rondins = [g.rectangle for g in ligne["rondins"]]
         else:
-            rects = etat.get(indice, {}).get("vehicules", [])
+            donnees = etat.get(indice, {})
+            vehicules = donnees.get("vehicules", [])
+            rondins = donnees.get("rondins", [])
 
+        # 1. écrasé par un véhicule ou un train
         case = pygame.Rect(col * t, indice * t, t, t)
         zone = case.inflate(2 * marge, 0)
-        return any(zone.colliderect(rect) for rect in rects)
+        if any(zone.colliderect(rect) for rect in vehicules):
+            return True
 
+        # 2. noyé : eau sans rondin sous le centre de la case, ni nénuphar
+        if ligne["type"] == "eau":
+            centre_x = col * t + t // 2
+            sur_rondin = any(rect.left <= centre_x <= rect.right for rect in rondins)
+            sur_nenuphar = ligne["decor"].get(col) == "nenuphar"
+            if not sur_rondin and not sur_nenuphar:
+                return True
 
-
-
-
-    def danger_devant(self, dcol=0, dlig=-1, marge=0, position=None, etat=None):
-            t = self.TAILLE_LIGNE
-            if position is None:
-                r = self.joueur.rectangle
-                col, indice_depart = round(r.x / t), r.y // t
-            else:
-                col, indice_depart = position
-            col += dcol
-            indice = indice_depart + dlig
-    
-            if col < 0 or col >= self.NB_COLONNES:
-                return True                       # hors du monde : on ne peut pas y aller
-    
-            ligne = self.lignes.get(indice)
-            if ligne is None:
-                return False                      # ligne pas encore chargée
-    
-    
-            if etat is None:
-                rects = [v.rectangle for v in ligne["vehicules"]]
-            else:
-                rects = etat.get(indice, {}).get("vehicules", [])
-    
-            case = pygame.Rect(col * t, indice * t, t, t)
-            zone = case.inflate(2 * marge, 0)
-            return any(zone.colliderect(rect) for rect in rects)
+        return False
 
 
 
@@ -486,30 +482,49 @@ class Monde:
         return matrice
 
 
-    def remplir_chemin_position(self,chemin,x,y,etat):
-        #x y position joueur
-        #etat etat du monde à ce moment de prédiction
-        liste_chemin=[]
-        c=[]
-        c.append(chemin)
-        if  self.obstacle_devant(0, -1, etat)==False: #devant
-            
-            c=[x-1 ,y ,2]
-            liste_chemin.append(c)
+    def remplir_chemin_position(self, chemin, x, y, etat):
+        # x = numéro de ligne, y = numéro de colonne (position du joueur dans la prédiction)
+        # etat = état du monde à ce moment de la prédiction (renvoyé par simulation(t))
+        liste_chemin = []
 
-        if  self.obstacle_devant(0, 1, etat)==False: #derrière
-            c=[x+1 ,y ,-1]
-            liste_chemin.append(c)
-
-        if  self.obstacle_devant(-1, 0, etat)==False: #gauche
-            c=[x ,y-1 , 0]
-            liste_chemin.append(c)
-
-        if  self.obstacle_devant(1, 0, etat )==False: #droite
-            c=[x ,y+1 ,0]
-            liste_chemin.append(c)
+        # (déplacement en colonnes, en lignes, nouvelle ligne x, nouvelle colonne y, score)
+        mouvements = [
+            (0, -1, x - 1, y, 2),    # devant
+            (0, 1, x + 1, y, -1),    # derrière
+            (-1, 0, x, y - 1, 0),    # gauche
+            (1, 0, x, y + 1, 0),     # droite
+        ]
+        for dcol, dlig, nouveau_x, nouveau_y, score in mouvements:
+            position = (y, x)        # obstacle_devant attend (colonne, ligne) : y puis x
+            if (not self.obstacle_devant(dcol, dlig, position=position)
+                    and not self.danger_devant(dcol, dlig, position=position, etat=etat)):
+                liste_chemin.append(list(chemin) + [[nouveau_x, nouveau_y, score]])
 
         return liste_chemin
+
+
+    
+
+    def meilleur_chemin(self,L):
+        meilleur=L[0]
+        max=0
+        for k in range (len(L[0])):
+            max+=L[0][k][2]
+
+        for i in range (len(L)):
+            somme=0
+            for k in range (len(L[i])):
+                somme+=L[i][k][2]
+            if somme>max:
+                max=somme
+                meilleur=L[i]
+
+        return max,meilleur
+
+            
+            
+        return False
+
 
     def affiche_matrice(self,m):
         for i in range (0, len(m)):
@@ -519,29 +534,23 @@ class Monde:
         for i in range (len(L)):
             print(L[i])
 
-    def analyse(self,generation,x,y):
-        #generation : nombre de cases prédites à l'avance
-        liste_liste_chemin=[] #liste de tous les chemins
-        c=[x,y,0] #chemin initial
-        liste_liste_chemin.append(c)
+    def analyse(self, generation, x, y):
+        # generation : nombre de cases prédites à l'avance
+        # x = ligne, y = colonne de départ
+        chemin_initial = [[x, y, 0]]              # un chemin = liste de choix [x, y, valeur]
+        liste_liste_chemin = [chemin_initial]     # liste de tous les chemins
 
-        for i in range (0,generation):
-            etat = self.simulation(10*i) #i instances de temps
-            liste_liste_tampon=[]
+        for i in range(0, generation):
+            etat = self.simulation(10 * i)        # état du monde pour le saut numéro i
+            liste_liste_tampon = []
 
+            for chemin in liste_liste_chemin:
+                # on repart de la dernière case du chemin, pas de la case de départ
+                x_fin, y_fin = chemin[-1][0], chemin[-1][1]
+                liste_nouvelles_valeurs = self.remplir_chemin_position(chemin, x_fin, y_fin, etat)
+                liste_liste_tampon += liste_nouvelles_valeurs     # += : on ajoute les chemins un par un
 
-
-            for k in range (0, len(liste_liste_chemin)):
-                liste_nouvelles_valeurs=self.remplir_chemin_position(liste_liste_chemin[k],x,y,etat)
-                #for w in range (len(liste_nouvelles_valeurs)):
-                    #liste_liste_tampon.append(liste_nouvelles_valeurs[w])
-                liste_liste_tampon.append(liste_nouvelles_valeurs)
-
-
-
-            liste_liste_chemin=[]       
-            for k in range (len(liste_liste_tampon)):
-                liste_liste_chemin.append(liste_liste_tampon[k])        
+            liste_liste_chemin = liste_liste_tampon
 
         return liste_liste_chemin
 
