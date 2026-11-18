@@ -64,20 +64,27 @@ while running:
                     monde.deplacer_joueur(-1, 0)
 
     # actions du bot
-    if mode_de_jeu == 2 and not game_over:
-        temps_actuel = pygame.time.get_ticks()
-        if temps_actuel - dernier_deplacement >= cooldown:
+    PAS = 12                       # images entre deux sauts du bot (c'est le `pas` passé à analyse)
+    frame = 0                      # compteur d'images
+    derniere_decision = -PAS
 
+    # après la création du monde (et aussi après chaque rejouer) :
+    if mode_de_jeu == 2 and not game_over:
+        if frame - derniere_decision >= PAS:
             col, ligne = monde.case_visee(0, 0)
-            liste_liste_chemin = monde.analyse(10, ligne, col)     # x = ligne, y = colonne
+            liste_liste_chemin = monde.analyse(10, ligne, col, PAS)
             best = monde.meilleur_chemin(liste_liste_chemin)
 
-            if best is not None:                    # sinon : aucun chemin, le bot attend
-                premier = best[1][1]                # première action du chemin
-                dligne = premier[0] - ligne         # -1 = devant, +1 = derrière
-                dcol = premier[1] - col             # -1 = gauche, +1 = droite
-                monde.deplacer_joueur(dcol, dligne)
-                dernier_deplacement = temps_actuel
+            if best is not None:
+                premier = best[1][1]
+                monde.deplacer_joueur(premier[1] - col, premier[0] - ligne)
+            else:
+                # aucun chemin sûr : tenter quand même un mouvement plutôt que rester immobile
+                for dcol, dlig in ((0, -1), (-1, 0), (1, 0), (0, 1)):
+                    if not monde.obstacle_devant(dcol, dlig):
+                        monde.deplacer_joueur(dcol, dlig)
+                        break
+            derniere_decision = frame
             
 
             

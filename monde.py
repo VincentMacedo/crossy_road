@@ -47,7 +47,7 @@ class Monde:
     VITESSES_VOITURES = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5]
     PROBA_RONDINS = 0.7                 # part des lignes d'eau avec des rondins (sinon : nénuphars)
     PROBA_NENUPHAR_EXTRA = 0.06         # nénuphars en plus du chemin garanti
-    VITESSES_COURANT = [0.6, 0.8, 1.2]
+    VITESSES_COURANT = [0.4, 0.6, 0.8]
     HAUTEUR_RONDIN = 8
     FACTEUR_HORS_ZONE = 0.6             # assombrissement de ce qui dépasse du monde
     TRAJET_RONDINS = LARGEUR + 2 * MARGE_VEHICULES + 160
@@ -76,6 +76,8 @@ class Monde:
     POIDS_LATERAL = 1      # pénalité par saut à gauche ou à droite
     POIDS_CENTRE = 1.5     # pénalité par colonne d'écart au centre, à la fin du chemin
     RAYON_CHARGEMENT = 25 
+    POIDS_SURVIE = 20      # bonus par pas survécu (un chemin qui s'arrête plus tôt vaut moins)
+    SECURITE_RONDIN = 4 
 
     # type de ligne : (couleur, hauteur du sol)
     STYLES = {
@@ -326,10 +328,9 @@ class Monde:
         j = self.joueur
         return abs(j.x_visuel - j.rectangle.x) < 2 and abs(j.y_visuel - j.rectangle.y) < 1
 
-    def sur_rondin(self, rect_rondin, centre_x):
-        """True si un joueur dont le centre est en centre_x est vraiment posé sur ce rondin
-        (son corps de 24 px ne dépasse pas : il reste MARGE_RONDIN px de chaque côté)."""
-        return rect_rondin.left + self.MARGE_RONDIN <= centre_x <= rect_rondin.right - self.MARGE_RONDIN
+    def sur_rondin(self, rect_rondin, centre_x, securite=0):
+        marge = self.MARGE_RONDIN + securite
+        return rect_rondin.left + marge <= centre_x <= rect_rondin.right - marge
     
     def rondin_sous_joueur(self):
         """Le rondin qui porte le joueur (ou None)."""
@@ -502,7 +503,7 @@ class Monde:
         # 2. noyé : eau sans rondin sous le centre de la case, ni nénuphar
         if ligne["type"] == "eau":
             centre_x = col * t + t // 2
-            sur_rondin = any(self.sur_rondin(rect, centre_x) for rect in rondins)
+            sur_rondin = any(self.sur_rondin(rect, centre_x, self.SECURITE_RONDIN) for rect in rondins)
             sur_nenuphar = ligne["decor"].get(col) == "nenuphar"
             if not sur_rondin and not sur_nenuphar:
                 return True
@@ -567,6 +568,7 @@ class Monde:
         lateraux = sum(1 for a, b in etapes if a[0] == b[0] and a[1] != b[1])
         ecart_centre = abs(chemin[-1][1] - centre)
         return (10 * net
+                + self.POIDS_SURVIE * (len(chemin) - 1)        # un chemin qui tient plus longtemps vaut plus
                 - self.POIDS_RECUL * reculs
                 - self.POIDS_ATTENTE * attentes
                 - self.POIDS_LATERAL * lateraux
@@ -599,27 +601,30 @@ class Monde:
     def analyse(self, generation, x, y, pas=10):
         # pas : nombre d'images entre deux sauts du joueur
         chemins = [[[x, y, 0]]]
+        impasses = []               # chemins qui ne peuvent plus continuer avant la profondeur voulue
         etat_precedent = None
         for i in range(0, generation):
             etat = self.simulation(pas * i, pas)
             meilleurs = {}          # (ligne, colonne) -> (valeur, meilleur chemin qui y arrive)
             for chemin in chemins:
                 x_fin, y_fin = chemin[-1][0], chemin[-1][1]
+                a_des_suites = False
                 if i > 0:
                     # entre deux sauts, un rondin entraîne le joueur
                     y_fin = self.colonne_apres_courant(x_fin, y_fin, etat_precedent, pas)
-                    if y_fin is None:
-                        continue                      # emporté hors du monde : chemin abandonné
-                for nouveau in self.remplir_chemin_position(chemin, x_fin, y_fin, etat):
-                    case = (nouveau[-1][0], nouveau[-1][1])
-                    valeur = self.valeur_chemin(nouveau)
-                    # deux chemins qui arrivent sur la même case au même moment ont le même avenir :
-                    # on ne garde que le meilleur
-                    if case not in meilleurs or valeur > meilleurs[case][0]:
-                        meilleurs[case] = (valeur, nouveau)
+                if y_fin is not None:
+                    for nouveau in self.remplir_chemin_position(chemin, x_fin, y_fin, etat):
+                        a_des_suites = True
+                        case = (nouveau[-1][0], nouveau[-1][1])
+                        valeur = self.valeur_chemin(nouveau)
+                        # même case au même moment = même avenir : on ne garde que le meilleur
+                        if case not in meilleurs or valeur > meilleurs[case][0]:
+                            meilleurs[case] = (valeur, nouveau)
+                if not a_des_suites and len(chemin) > 1:
+                    impasses.append(chemin)      # on le garde : mieux vaut un chemin court que rien
             chemins = [v[1] for v in meilleurs.values()]
             etat_precedent = etat
-        return chemins
+        return chemins + impasses
 
     
 
