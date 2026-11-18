@@ -69,7 +69,7 @@ while running:
         if temps_actuel - dernier_deplacement >= cooldown:
 
             col, ligne = monde.case_visee(0, 0)
-            liste_liste_chemin = monde.analyse(5, ligne, col)     # x = ligne, y = colonne
+            liste_liste_chemin = monde.analyse(10, ligne, col)     # x = ligne, y = colonne
             best = monde.meilleur_chemin(liste_liste_chemin)
 
             if best is not None:                    # sinon : aucun chemin, le bot attend

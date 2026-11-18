@@ -47,10 +47,11 @@ class Monde:
     VITESSES_VOITURES = [2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5]
     PROBA_RONDINS = 0.7                 # part des lignes d'eau avec des rondins (sinon : nénuphars)
     PROBA_NENUPHAR_EXTRA = 0.06         # nénuphars en plus du chemin garanti
-    VITESSES_COURANT = [0.8, 1.2, 1.6]
+    VITESSES_COURANT = [0.6, 0.8, 1.2]
     HAUTEUR_RONDIN = 8
     FACTEUR_HORS_ZONE = 0.6             # assombrissement de ce qui dépasse du monde
     TRAJET_RONDINS = LARGEUR + 2 * MARGE_VEHICULES + 160
+    MARGE_RONDIN = 12
 
     # --- Projection ---
     ZOOM = 1.5
@@ -68,6 +69,13 @@ class Monde:
         (230, 70, 60), (240, 190, 50), (70, 150, 230),
         (120, 200, 120), (200, 100, 220), (240, 240, 240),
     ]
+
+        # --- Réglages du bot ---
+    POIDS_RECUL = 2        # pénalité par pas en arrière
+    POIDS_ATTENTE = 0.5    # pénalité par attente (plus faible que POIDS_LATERAL : attendre vaut mieux)
+    POIDS_LATERAL = 1      # pénalité par saut à gauche ou à droite
+    POIDS_CENTRE = 1.5     # pénalité par colonne d'écart au centre, à la fin du chemin
+    RAYON_CHARGEMENT = 25 
 
     # type de ligne : (couleur, hauteur du sol)
     STYLES = {
@@ -318,6 +326,22 @@ class Monde:
         j = self.joueur
         return abs(j.x_visuel - j.rectangle.x) < 2 and abs(j.y_visuel - j.rectangle.y) < 1
 
+    def sur_rondin(self, rect_rondin, centre_x):
+        """True si un joueur dont le centre est en centre_x est vraiment posé sur ce rondin
+        (son corps de 24 px ne dépasse pas : il reste MARGE_RONDIN px de chaque côté)."""
+        return rect_rondin.left + self.MARGE_RONDIN <= centre_x <= rect_rondin.right - self.MARGE_RONDIN
+    
+    def rondin_sous_joueur(self):
+        """Le rondin qui porte le joueur (ou None)."""
+        r = self.joueur.rectangle
+        ligne = self.lignes.get(r.y // self.TAILLE_LIGNE)
+        if ligne is None:
+            return None
+        for rondin in ligne["rondins"]:
+            if self.sur_rondin(rondin.rectangle, r.centerx):
+                return rondin
+        return None
+
     def mettre_a_jour(self):
         joueur = self.joueur
         r = joueur.rectangle
@@ -331,6 +355,14 @@ class Monde:
         self.lignes = {
             i: l for i, l in self.lignes.items()
             if ligne_cam - 17 <= i <= ligne_cam + 17
+        }
+        for indice in range(ligne_cam - self.RAYON_CHARGEMENT, ligne_cam + self.RAYON_CHARGEMENT + 1):
+            if indice not in self.lignes:
+                self.lignes[indice] = self.generer_ligne(indice)
+
+        self.lignes = {
+            i: l for i, l in self.lignes.items()
+            if ligne_cam - self.RAYON_CHARGEMENT - 5 <= i <= ligne_cam + self.RAYON_CHARGEMENT + 5
         }
 
         # le rondin qui porte le joueur (repéré avant que les rondins ne bougent)
@@ -470,13 +502,26 @@ class Monde:
         # 2. noyé : eau sans rondin sous le centre de la case, ni nénuphar
         if ligne["type"] == "eau":
             centre_x = col * t + t // 2
-            sur_rondin = any(rect.left <= centre_x <= rect.right for rect in rondins)
+            sur_rondin = any(self.sur_rondin(rect, centre_x) for rect in rondins)
             sur_nenuphar = ligne["decor"].get(col) == "nenuphar"
             if not sur_rondin and not sur_nenuphar:
                 return True
 
         return False
 
+    def colonne_apres_courant(self, x, y, etat, pas):
+        """Colonne du joueur `pas` images plus tard s'il est resté sur un rondin à la case
+        (ligne x, colonne y) : le courant l'entraîne. None s'il est emporté hors du monde."""
+        t = self.TAILLE_LIGNE
+        donnees = etat.get(x, {})
+        centre_x = y * t + t // 2
+        for rect, vitesse in zip(donnees.get("rondins", []), donnees.get("vitesses", [])):
+            if self.sur_rondin(rect, centre_x):
+                y = y + round(vitesse * pas / t)
+                break
+        if y < 0 or y >= self.NB_COLONNES:
+            return None
+        return y
 
 
 
@@ -512,21 +557,32 @@ class Monde:
         return liste_chemin
 
 
-    
+    def valeur_chemin(self, chemin):
+        """Valeur d'un chemin (plus c'est grand, mieux c'est)."""
+        centre = (self.NB_COLONNES - 1) / 2
+        etapes = list(zip(chemin, chemin[1:]))                 # (case avant, case après)
+        net = chemin[0][0] - chemin[-1][0]                     # lignes gagnées
+        reculs = sum(1 for c in chemin[1:] if c[2] == -1)
+        attentes = sum(1 for a, b in etapes if a[0] == b[0] and a[1] == b[1])
+        lateraux = sum(1 for a, b in etapes if a[0] == b[0] and a[1] != b[1])
+        ecart_centre = abs(chemin[-1][1] - centre)
+        return (10 * net
+                - self.POIDS_RECUL * reculs
+                - self.POIDS_ATTENTE * attentes
+                - self.POIDS_LATERAL * lateraux
+                - self.POIDS_CENTRE * ecart_centre)
+
+
+   
 
     def meilleur_chemin(self, L):
         if len(L) == 0:                      # aucun chemin possible
             return None
+        meilleur = max(L, key=self.valeur_chemin)
+        return self.valeur_chemin(meilleur), meilleur
 
-        def valeur(chemin):
-            net = chemin[0][0] - chemin[-1][0]                    # lignes gagnées
-            reculs = sum(1 for c in chemin[1:] if c[2] == -1)
-            attentes = sum(1 for a, b in zip(chemin, chemin[1:]) if (a[0], a[1]) == (b[0], b[1]))
-            return 10 * net - 2 * reculs - 1 * attentes
-
-        meilleur = max(L, key=valeur)        # max garde le premier en cas d'égalité
-        return valeur(meilleur), meilleur
-
+        
+        
             
             
 
@@ -542,16 +598,28 @@ class Monde:
 
     def analyse(self, generation, x, y, pas=10):
         # pas : nombre d'images entre deux sauts du joueur
-        chemin_initial = [[x, y, 0]]
-        liste_liste_chemin = [chemin_initial]
+        chemins = [[[x, y, 0]]]
+        etat_precedent = None
         for i in range(0, generation):
-            etat = self.simulation(pas * i, pas)      # le joueur saute à t = pas*i et y reste `pas` images
-            liste_liste_tampon = []
-            for chemin in liste_liste_chemin:
+            etat = self.simulation(pas * i, pas)
+            meilleurs = {}          # (ligne, colonne) -> (valeur, meilleur chemin qui y arrive)
+            for chemin in chemins:
                 x_fin, y_fin = chemin[-1][0], chemin[-1][1]
-                liste_liste_tampon += self.remplir_chemin_position(chemin, x_fin, y_fin, etat)
-            liste_liste_chemin = liste_liste_tampon
-        return liste_liste_chemin
+                if i > 0:
+                    # entre deux sauts, un rondin entraîne le joueur
+                    y_fin = self.colonne_apres_courant(x_fin, y_fin, etat_precedent, pas)
+                    if y_fin is None:
+                        continue                      # emporté hors du monde : chemin abandonné
+                for nouveau in self.remplir_chemin_position(chemin, x_fin, y_fin, etat):
+                    case = (nouveau[-1][0], nouveau[-1][1])
+                    valeur = self.valeur_chemin(nouveau)
+                    # deux chemins qui arrivent sur la même case au même moment ont le même avenir :
+                    # on ne garde que le meilleur
+                    if case not in meilleurs or valeur > meilleurs[case][0]:
+                        meilleurs[case] = (valeur, nouveau)
+            chemins = [v[1] for v in meilleurs.values()]
+            etat_precedent = etat
+        return chemins
 
     
 
